@@ -1,10 +1,20 @@
 use std::{
+    collections::HashMap,
     env,
     fs::{self, File},
     io::{Read, Write},
 };
 
 use rand::prelude::*;
+
+use std::net::SocketAddr;
+
+use hyper::server::conn::Http;
+use hyper::service::service_fn;
+use hyper::{Body, Method, Request, Response, StatusCode};
+use tokio::net::TcpListener;
+
+use urlencoding::decode;
 
 pub fn get_random_i32() -> i32 {
     let x: i32 = random();
@@ -48,7 +58,45 @@ pub fn del_file(path: &str) {
     fs::remove_file(path).expect("Unable to delete");
 }
 
-fn main() {
+async fn do_echo(_req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+    Ok(Response::new(Body::from("echo")))
+}
+
+async fn reverse_echo(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+    let whole_body = hyper::body::to_bytes(req.into_body()).await?;
+
+    let reversed_body = whole_body.iter().rev().cloned().collect::<Vec<u8>>();
+    Ok(Response::new(Body::from(reversed_body)))
+}
+
+async fn hello(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+    let q = req.uri().query().unwrap();
+    let kv: HashMap<&str, &str> = q
+        .split_whitespace()
+        .map(|s| s.split_at(s.find("=").unwrap()))
+        .map(|(key, val)| (key, &val[1..]))
+        .collect();
+    let user = kv.get("user").unwrap();
+    let hello = format!("Hello {}", decode(&user).expect("UTF-8"));
+    Ok(Response::new(Body::from(hello)))
+}
+
+async fn service(req: Request<Body>) -> Result<Response<Body>, hyper::Error> {
+    match (req.method(), req.uri().path()) {
+        (&Method::GET, "/echo") => do_echo(req).await,
+        (&Method::POST, "/echo/reversed") => reverse_echo(req).await,
+        (&Method::POST, "/hello") => hello(req).await,
+        // Return the 404 Not Found for other routes.
+        _ => {
+            let mut not_found = Response::default();
+            *not_found.status_mut() = StatusCode::NOT_FOUND;
+            Ok(not_found)
+        }
+    }
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("Hello, world!");
     print_env();
 
@@ -61,4 +109,21 @@ fn main() {
     create_file("tmp.txt", "This is in a file");
     println!("File content is ==> {}", read_file("tmp.txt"));
     //del_file("tmp.txt");
+
+    let addr = SocketAddr::from(([0, 0, 0, 0], 8080));
+
+    let listener = TcpListener::bind(addr).await?;
+    println!("Listening on http://{}", addr);
+    loop {
+        let (stream, _) = listener.accept().await?;
+
+        tokio::task::spawn(async move {
+            if let Err(err) = Http::new()
+                .serve_connection(stream, service_fn(service))
+                .await
+            {
+                println!("Error serving connection: {:?}", err);
+            }
+        });
+    }
 }

@@ -8,3 +8,12 @@ edition = "2021"
 [dependencies]
 rand = "0.7.3"
 getrandom = "0.1.14"
+hyper_wasi = { version = "0.15", features = ["full"] }
+tokio_wasi = { version = "1", features = [
+    "rt",
+    "macros",
+    "net",
+    "time",
+    "io-util",
+] }
+urlencoding = "2.1.3"
